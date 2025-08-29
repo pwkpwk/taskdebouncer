@@ -14,8 +14,7 @@ public class TaskResultHub<TArg, TResult>(
     
     public Task<TResult> Add(CancellationToken cancellationToken)
     {
-        Tracker tracker = new();
-        LinkedListNode<Tracker> node = new(tracker);
+        LinkedListNode<Tracker> node = new(new());
 
         _guard.EnterWriteLock();
         _trackers.AddLast(node);
@@ -26,80 +25,61 @@ public class TaskResultHub<TArg, TResult>(
             _guard.EnterWriteLock();
             _trackers.Remove(node);
             _guard.ExitWriteLock();
-            tracker.Cancel();
+            node.Value.Cancel();
         });
         
-        return tracker.Task;
+        return node.Value.Task;
     }
 
     private void OnTaskFinished(Task<TResult> task)
     {
-        Detach();
-        
-        if (task.IsFaulted)
-        {
-            OnTaskFailed(task.Exception);
-        }
-        else if (task.IsCanceled)
-        {
-            OnTaskCancelled();
-        }
-        else
-        {
-            OnTaskSucceeded(task.Result);
-        }
-    }
-
-    private void Detach()
-    {
         debouncer.RemoveHub(arg);
-    }
 
-    private void OnTaskFailed(Exception exception)
-    {
+        // The hub has been removed from the debouncer, but task cancellations still may happen,
+        // hence the lock
         _guard.EnterReadLock();
         try
         {
-            foreach (var tracker in _trackers)
+            if (task.IsFaulted)
             {
-                tracker.Fail(exception);
+                OnTaskFailed(task.Exception);
+            }
+            else if (task.IsCanceled)
+            {
+                OnTaskCancelled();
+            }
+            else
+            {
+                OnTaskSucceeded(task.Result);
             }
         }
         finally
         {
             _guard.ExitReadLock();
+        }
+    }
+
+    private void OnTaskFailed(Exception exception)
+    {
+        foreach (var tracker in _trackers)
+        {
+            tracker.Fail(exception);
         }
     }
 
     private void OnTaskCancelled()
     {
-        _guard.EnterReadLock();
-        try
+        foreach (var tracker in _trackers)
         {
-            foreach (var tracker in _trackers)
-            {
-                tracker.Cancel();
-            }
-        }
-        finally
-        {
-            _guard.ExitReadLock();
+            tracker.Cancel();
         }
     }
     
     private void OnTaskSucceeded(TResult result)
     {
-        _guard.EnterReadLock();
-        try
+        foreach (var tracker in _trackers)
         {
-            foreach (var tracker in _trackers)
-            {
-                tracker.SetResult(result);
-            }
-        }
-        finally
-        {
-            _guard.ExitReadLock();
+            tracker.SetResult(result);
         }
     }
 
